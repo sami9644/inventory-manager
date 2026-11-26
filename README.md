@@ -1,109 +1,112 @@
 # Single-Shop Inventory & Sales Manager
 
-A PostgreSQL-backed inventory and point-of-sale (POS) management system designed specifically for single-shop retail operations. It tracks product catalogs, real-time stock levels, stock-in/stock-out audit trails, and itemized sales transactions with payment references.
+A Python (Flask) and PostgreSQL (Supabase-compatible) inventory and point-of-sale (POS) management application designed for single-shop retail operations. It tracks product catalogs, real-time stock levels, stock-in/stock-out audit trails, itemized sales with payment references, and daily sales reports.
 
 ## Features
 
-* **Single-Shop Architecture:** Streamlined schema without multi-tenant or multi-branch overhead.
-* **UUID Primary Keys:** Universally unique identifiers (`UUID`) generated via `gen_random_uuid()` for every record across all tables.
-* **Product Catalog & Stock Tracking:** Manage SKUs, pricing (unit and cost price), active status, current inventory counts, and low-stock reorder thresholds.
-* **Complete Stock Audit Trail:** Every inventory addition (`STOCK_IN`), deduction (`STOCK_OUT`), or manual correction (`ADJUSTMENT`) logs `stock_before`, `quantity_delta`, and `stock_after`.
-* **Sales & Payment Tracking:** Record receipt numbers, timestamps (`sold_at`), payment methods (`CASH`, `CARD`, `MOBILE_MONEY`, `BANK_TRANSFER`, `OTHER`), and unique transaction references (`tx_ref`), linked to individual sold items.
+* **Admin Authentication:** Session-based admin login backed by environment credentials (`admin_user`, `admin_pass`) and protected via a `@login_required` decorator.
+* **Single-Shop Architecture:** Streamlined schema and routes tailored to one retail shop without multi-tenant overhead.
+* **UUID Primary Keys:** Universally unique identifiers (`UUID`) generated via `gen_random_uuid()` across all tables.
+* **Product Catalog & CRUD:** Add, edit, list, and soft-delete products (`is_active = FALSE`) while preserving historical sales and stock logs.
+* **Atomic Stock Movements:** Record `STOCK_IN`, `STOCK_OUT`, and `ADJUSTMENT` operations using row-level database locks (`FOR UPDATE`) and full `stock_before` / `stock_after` audit trails.
+* **POS Checkout (Form & JSON):** Record multi-item sales with `receipt_number`, `payment_method`, `tx_ref`, and `sold_at` timestamps while automatically deducting inventory and logging `STOCK_OUT` movements.
+* **Daily Sales Reporting:** Filter sales summaries, payment method breakdowns, itemized transactions, and low-stock alerts by date (defaulting to the current date).
+
+## Tech Stack
+
+* **Backend:** Python 3, Flask
+* **Database:** PostgreSQL 13+ / Supabase (via `psycopg2-binary` with `RealDictCursor`)
+* **Configuration:** `python-dotenv`
+
+## Project Structure
+
+```text
+.
+├── app.py              # Flask application, auth, CRUD, stock & sales routes
+├── schema.sql          # PostgreSQL database tables and indexes
+├── .env                # Environment variables (DB URI, admin credentials)
+├── README.md           # Project documentation
+└── templates/          # Jinja2 HTML templates (to be added)
+    ├── login.html
+    ├── dashboard.html
+    ├── products.html
+    ├── stock_history.html
+    └── new_sale.html
+```
 
 ## Database Schema Overview
 
-The PostgreSQL schema consists of four core tables:
-
-1. **`products`**: Stores the shop's item catalog, pricing, reorder levels, and `current_stock`.
-2. **`stock_movements`**: Immutable ledger of all stock-in, stock-out, and adjustment events tied to a `product_id`.
-3. **`sales`**: Stores transaction-level metadata including `receipt_number`, `payment_method`, `tx_ref`, `total_amount`, and `sold_at`.
+1. **`products`**: Stores SKU, name, description, `unit_price`, `cost_price`, `current_stock`, `reorder_level`, and `is_active`.
+2. **`stock_movements`**: Immutable ledger of all `STOCK_IN`, `STOCK_OUT`, and `ADJUSTMENT` events with `quantity_delta`, `stock_before`, `stock_after`, `reason`, and `reference_code`.
+3. **`sales`**: Transaction-level header storing `receipt_number`, `payment_method` (`CASH`, `CARD`, `MOBILE_MONEY`, `BANK_TRANSFER`, `OTHER`), `tx_ref`, `total_amount`, and `sold_at`.
 4. **`sale_items`**: Line-item details for each sale (`sale_id`, `product_id`, `quantity`, `unit_price`, and auto-calculated `line_total`).
 
-## Prerequisites
+## Setup & Installation
 
-* **PostgreSQL 13+** (includes built-in `gen_random_uuid()`; for PostgreSQL 12 or older, the schema enables the `pgcrypto` extension).
-* A PostgreSQL client (`psql`, pgAdmin, DBeaver, etc.) or backend runtime (Node.js, Python, Go, etc.).
+### 1. Install Python Dependencies
 
-## Getting Started
-
-### 1. Create the Database
 ```bash
-createdb shop_inventory
+pip install flask psycopg2-binary python-dotenv
 ```
 
-### 2. Apply the Schema
-Save the schema SQL to `schema.sql` and run:
+### 2. Configure Environment Variables
+
+Create a `.env` file in the project root:
+
+```env
+DATABASE_URL=postgresql://postgres.[your-project-ref]:[your-password]@aws-0-[region].pooler.supabase.com:6543/postgres
+admin_user=admin
+admin_pass=your_strong_password
+SECRET_KEY=your_random_flask_secret_key
+```
+
+### 3. Apply the Database Schema
+
+Run `schema.sql` against your Supabase SQL Editor or local PostgreSQL database:
+
 ```bash
-psql -d shop_inventory -f schema.sql
+psql "$DATABASE_URL" -f schema.sql
 ```
 
-## Example Usage
+### 4. Run the Application
 
-### Add a Product
-```sql
-INSERT INTO products (sku, name, description, unit_price, cost_price, current_stock, reorder_level)
-VALUES ('SKU-001', 'Wireless Mouse', '2.4GHz ergonomic wireless mouse', 25.00, 14.50, 50, 10)
-RETURNING id, sku, name, current_stock;
+```bash
+python app.py
 ```
 
-### Record Stock In (Restock)
-```sql
-BEGIN;
+The server starts in debug mode at `http://127.0.0.1:5000`.
 
-UPDATE products
-SET current_stock = current_stock + 20, updated_at = NOW()
-WHERE sku = 'SKU-001';
+## Application Routes
 
-INSERT INTO stock_movements (product_id, movement_type, quantity_delta, stock_before, stock_after, reason, reference_code)
-SELECT id, 'STOCK_IN', 20, current_stock - 20, current_stock, 'Supplier restock', 'PO-2026-001'
-FROM products
-WHERE sku = 'SKU-001';
+All routes except `/login` require an authenticated admin session (`@login_required`).
 
-COMMIT;
+| Method | Route | Description |
+| :--- | :--- | :--- |
+| `GET`, `POST` | `/login` | Admin login using `.env` (`admin_user` & `admin_pass`). |
+| `GET` | `/logout` | Clears the active admin session. |
+| `GET` | `/` | Daily sales report & dashboard (`?date=YYYY-MM-DD`, defaults to today), payment breakdown, and low-stock alerts. |
+| `GET` | `/products` | Lists all active products in the shop. |
+| `POST` | `/products/add` | Creates a product and logs an initial `STOCK_IN` movement if `current_stock > 0`. |
+| `POST` | `/products/<uuid:product_id>/edit` | Updates product details, pricing, and reorder threshold. |
+| `POST` | `/products/<uuid:product_id>/delete` | Soft-deletes a product (`is_active = FALSE`). |
+| `POST` | `/stock/move` | Records `STOCK_IN`, `STOCK_OUT`, or `ADJUSTMENT` with row locking (`FOR UPDATE`). |
+| `GET` | `/stock/history` | Displays the latest 200 stock movements across all products. |
+| `GET`, `POST` | `/sales/new` | Renders checkout or records a multi-item sale (supports both HTML form arrays and JSON). |
+
+## API Checkout Payload Example (`POST /sales/new`)
+
+In addition to standard HTML form submissions (`product_id[]` and `quantity[]`), `/sales/new` accepts `application/json` requests:
+
+```json
+{
+  "payment_method": "MOBILE_MONEY",
+  "tx_ref": "TXN-20261126-8841",
+  "receipt_number": "RCP-20261126-001",
+  "items": [
+    {
+      "product_id": "550e8400-e29b-41d4-a716-446655440000",
+      "quantity": 2
+    }
+  ]
+}
 ```
-
-### Record a Sale & Deduct Stock
-```sql
-BEGIN;
-
--- 1. Create the sale header
-WITH new_sale AS (
-    INSERT INTO sales (receipt_number, payment_method, tx_ref, total_amount)
-    VALUES ('RCP-1001', 'MOBILE_MONEY', 'TXN-987654321', 50.00)
-    RETURNING id
-),
--- 2. Insert line items
-inserted_items AS (
-    INSERT INTO sale_items (sale_id, product_id, quantity, unit_price)
-    SELECT new_sale.id, p.id, 2, p.unit_price
-    FROM new_sale, products p
-    WHERE p.sku = 'SKU-001'
-    RETURNING product_id, quantity
-)
--- 3. Update product stock
-UPDATE products p
-SET current_stock = p.current_stock - i.quantity, updated_at = NOW()
-FROM inserted_items i
-WHERE p.id = i.product_id;
-
--- 4. Log stock out movement
-INSERT INTO stock_movements (product_id, movement_type, quantity_delta, stock_before, stock_after, reason, reference_code)
-SELECT id, 'STOCK_OUT', -2, current_stock + 2, current_stock, 'Customer sale', 'RCP-1001'
-FROM products
-WHERE sku = 'SKU-001';
-
-COMMIT;
-```
-
-### Check Low-Stock Items
-```sql
-SELECT sku, name, current_stock, reorder_level
-FROM products
-WHERE is_active = TRUE AND current_stock <= reorder_level
-ORDER BY current_stock ASC;
-```
-
-## Next Steps & Extensibility
-
-* **Database Triggers:** Add PostgreSQL triggers on `sale_items` and `stock_movements` to automatically keep `products.current_stock` in sync without manual transaction steps.
-* **Reporting Views:** Create SQL views for daily revenue by `payment_method`, top-selling items, and profit margins (`unit_price - cost_price`).
