@@ -17,6 +17,7 @@ A Python (Flask) and PostgreSQL (Supabase-compatible) inventory and point-of-sal
 * **Backend:** Python 3, Flask
 * **Database:** PostgreSQL 13+ / Supabase (via `psycopg2-binary` with `RealDictCursor`)
 * **Configuration:** `python-dotenv`
+* **frontend** `html5 css js`
 
 ## Project Structure
 
